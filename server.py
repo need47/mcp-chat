@@ -1,10 +1,11 @@
+import json
 import sys
+from contextlib import asynccontextmanager
 from typing import Any, Literal, get_args
 
 import httpx
-from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.fastmcp import Context, FastMCP
 
-from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def http_lifespan(mcp: FastMCP):
@@ -21,6 +22,7 @@ async def http_lifespan(mcp: FastMCP):
         }
     finally:
         await client.aclose()
+
 
 # Initialize FastMCP server
 mcp = FastMCP("PUG-REST", dependencies=["httpx"], lifespan=http_lifespan)
@@ -107,6 +109,9 @@ async def get_pubchem_compound_property(cids: list[int], props: list[PropertyTyp
     Args:
         cids (list[int]): List of compound IDs
         props (list[PropertyType]): List of properties to retrieve
+
+    Returns:
+        str: a JSON array of objects representing compound properties
     """
     if not cids or not props:
         return "No compound IDs or properties specified."
@@ -124,16 +129,19 @@ async def get_pubchem_compound_property(cids: list[int], props: list[PropertyTyp
     properties = []
     for entry in data["PropertyTable"]["Properties"]:
         cid = entry.get("CID", "Unknown")
+        p = {"CID": cid}
+        properties.append(p)
+
         for prop in props:
             values = entry.get(prop)
             if values is None:
-                properties.append(f"CID {cid} - {prop}: Not available")
+                p[prop] = "Not available"
             elif isinstance(values, list):
-                properties.append(f"CID {cid} - {prop}: {', '.join(map(str, values))}")
+                p[prop] = ", ".join(map(str, values))
             else:
-                properties.append(f"CID {cid} - {prop}: {values}")
+                p[prop] = values
 
-    return "\n---\n".join(properties)
+    return json.dumps(properties, indent=2)
 
 
 if __name__ == "__main__":
