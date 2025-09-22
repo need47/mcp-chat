@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "mcp-pug-rest": {
+      "command": "/Users/tjcheng/.local/bin/uv",
+      "args": [
+        "--directory",
+        "/Users/tjcheng/Coding/mcp-pug-rest",
+        "run",
+        "server.py"
+      ],
+      "env": {
+        "DATABASE_PATH": "test.db",
+        "PYTHONWARNINGS": "ignore",
+        "LOG_LEVEL": "WARNING",
+        "CHUK_LOG_LEVEL": "WARNING",
+        "MCP_LOG_LEVEL": "WARNING"
+      }
+    }
+  }
+}

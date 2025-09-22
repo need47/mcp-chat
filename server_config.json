@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "mcp-pug-rest": {
+      "command": "/Users/tjcheng/.local/bin/uv",
+      "args": [
+	"--directory",
+	"/Users/tjcheng/Coding/mcp-pug-rest",
+	"run",
+	"server.py"
+      ],
+      "env": {
+        "DATABASE_PATH": "test.db"
+      }
+    }
+  }
+}

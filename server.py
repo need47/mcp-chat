@@ -1,10 +1,29 @@
+import sys
 from typing import Any, Literal, get_args
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def http_lifespan(mcp: FastMCP):
+    # One shared async client with pooling, keep-alive, HTTP/2, timeouts, and limits.
+    client = httpx.AsyncClient(
+        http2=True,  # if the server supports it, this improves perf
+        timeout=httpx.Timeout(10.0, connect=5.0),
+        limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
+        headers={"User-Agent": "mcp-http-tools/1.0"},
+    )
+    try:
+        yield {
+            "http": client,
+        }
+    finally:
+        await client.aclose()
 
 # Initialize FastMCP server
-mcp = FastMCP("PUG-REST")
+mcp = FastMCP("PUG-REST", dependencies=["httpx"], lifespan=http_lifespan)
 
 # Constants
 USER_AGENT = "weather-app/1.0"
@@ -13,16 +32,15 @@ PUG = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 PUG_COMPOUND = f"{PUG}/compound"
 
 
-async def make_request(url: str) -> dict[str, Any] | None:
+async def make_request(url: str, client: httpx.AsyncClient) -> dict[str, Any] | None:
     """Make a request to the NWS API with proper error handling."""
     headers = {"User-Agent": USER_AGENT, "Accept": "application/geo+json"}
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers, timeout=30.0)
-            response.raise_for_status()
-            return response.json()
-        except Exception:
-            return None
+    try:
+        response = await client.get(url, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        return None
 
 
 PropertyType = Literal[
@@ -76,14 +94,14 @@ PropertyType = Literal[
 ]
 
 
-@mcp.tool()
+@mcp.resource("resource://pubchem_compound_property")
 async def list_pubchem_compound_property() -> str:
     """List available PubChem compound properties."""
     return "\n".join(list(get_args(PropertyType)))
 
 
 @mcp.tool()
-async def get_pubchem_compound_property(cids: list[int], props: list[PropertyType]) -> str:
+async def get_pubchem_compound_property(cids: list[int], props: list[PropertyType], ctx: Context) -> str:
     """Get properties for a list of compound IDs.
 
     Args:
@@ -93,9 +111,11 @@ async def get_pubchem_compound_property(cids: list[int], props: list[PropertyTyp
     if not cids or not props:
         return "No compound IDs or properties specified."
 
+    client: httpx.AsyncClient = ctx.request_context.lifespan_context["http"]
+
     # Make a request to the PubChem PUG REST API
     url = f"{PUG_COMPOUND}/cid/{','.join(map(str, cids))}/property/{','.join(props)}/JSON"
-    data = await make_request(url)
+    data = await make_request(url, client)
 
     if not data or "PropertyTable" not in data or "Properties" not in data["PropertyTable"]:
         return "Unable to fetch properties from PubChem."
@@ -118,4 +138,12 @@ async def get_pubchem_compound_property(cids: list[int], props: list[PropertyTyp
 
 if __name__ == "__main__":
     # Initialize and run the server
-    mcp.run(transport="stdio")
+    # mcp.run(transport="stdio")
+    # Wrap your main server code with exception handling
+    try:
+        mcp.run(transport="stdio")
+    except (BrokenPipeError, ConnectionResetError, EOFError):
+        # Client disconnected, exit gracefully
+        sys.exit(0)
+    except KeyboardInterrupt:
+        sys.exit(0)
