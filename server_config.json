@@ -1,16 +1,17 @@
 {
   "mcpServers": {
-    "mcp-pug-rest": {
-      "command": "/Users/tjcheng/.local/bin/uv",
+    "mcp-pug-rest-local": {
+      "command": "/home/chengt2/.local/bin/uv",
       "args": [
-	"--directory",
-	"/Users/tjcheng/Coding/mcp-pug-rest",
-	"run",
-	"server.py"
-      ],
-      "env": {
-        "DATABASE_PATH": "test.db"
-      }
+	    "--directory",
+    	"/netmnt/vast01/pubchem3d/pubchem_rnd/users/chengt2/pc/mcp-pug-rest",
+	    "run",
+	    "server.py"
+      ]
+    },
+    "mcp-pug-rest": {
+        "type": "http",
+        "url": "https://testpubchem.ncbi.nlm.nih.gov/rest/pug_tiejun/mcp"
     }
   }
 }

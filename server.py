@@ -104,10 +104,10 @@ async def list_pubchem_compound_property() -> str:
 
 @mcp.tool()
 async def get_pubchem_compound_property(cids: list[int], props: list[PropertyType], ctx: Context) -> str:
-    """Get properties for a list of compound IDs.
+    """Get properties for a list of compound IDs (CIDs).
 
     Args:
-        cids (list[int]): List of compound IDs
+        cids (list[int]): List of compound IDs to retrieve properties for
         props (list[PropertyType]): List of properties to retrieve
 
     Returns:
