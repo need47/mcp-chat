@@ -2,20 +2,13 @@ import argparse
 import asyncio
 import json
 import os
+import readline
 import sys
 import textwrap
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from typing import List, Union
-
-# Import readline for history handling
-try:
-    import readline
-
-    HAS_READLINE = True
-except ImportError:
-    HAS_READLINE = False
 
 # Import pydantic for exception handling
 try:
@@ -53,9 +46,6 @@ console = Console()
 
 def setup_readline():
     """Setup readline with history"""
-    if not HAS_READLINE:
-        return None
-
     # Setup history
     history_file = os.path.expanduser("~/.mcp_chat_history")
     try:
@@ -216,7 +206,10 @@ class MCPChatBot:
     """Enhanced MCP client with LLM chat capabilities"""
 
     def __init__(self, mcp_server_path: str, llm_config: LLMConfig):
-        self.mcp_client = Client(mcp_server_path)
+        if mcp_server_path == "https://api.githubcopilot.com/mcp":
+            self.mcp_client = Client(mcp_server_path, auth=os.getenv("GITHUB_PAT"))
+        else:
+            self.mcp_client = Client(mcp_server_path)
         self.llm_config = llm_config
         self.conversation_history: List[Union[SystemMessage, HumanMessage, AIMessage]] = []
         self.available_tools = []
@@ -301,11 +294,8 @@ class MCPChatBot:
     async def chat_interactive(self):
         """Start interactive chat session"""
         # Show input capabilities and mode
-        if HAS_READLINE:
-            console.print("✨ Enhanced interactive input enabled:")
-            console.print("   • ⬆️⬇️ arrows: Navigate command history")
-        else:
-            console.print("🔧 Basic interactive input mode:")
+        console.print("✨ Enhanced interactive input enabled:")
+        console.print("   • 🔄 arrows: Navigate command history")
         console.print("   • 🎨 Colored prompts and formatted output")
         console.print("   • 🛑 Ctrl+C: Exit chat")
         console.print("   • 📦 Install readline for command history")
@@ -951,48 +941,34 @@ class MCPChatBot:
             """
             **🎯 Available Commands:**
 
-            • 💬 **Chat**: Type any message to chat with the AI assistant
-            • 🚪 **`quit`**, **`exit`**, **`q`**: Exit the chat
-            • 🔧 **`/tools`**: List all available MCP tools
-            • 📚 **`/resources`**: List all available MCP resources
-            • 🛠️ **`/use_tool <tool_name> [param=value ...]`**: Execute an MCP tool manually
-            • 📄 **`/get_resource <uri>`**: Get content from an MCP resource
-            • ❓ **`/help`**, **`/h`**, **`?`**: Show this help message
+            - 💬 **Chat**: Type any message to chat with the AI assistant
+            - 🚪 **`quit`**, **`exit`**, **`q`**, **`x`**: Exit the chat
+            - 🔧 **`/tools`**: List all available MCP tools
+            - 📚 **`/resources`**: List all available MCP resources
+            - 🔨 **`/use_tool <tool_name> [param=value ...]`**: Execute an MCP tool manually
+            - 📄 **`/get_resource <uri>`**: Get content from an MCP resource
+            - ❓ **`/help`**, **`/h`**, **`?`**: Show this help message
 
             **🤖 Smart Tool Integration:**
-            • 🧠 The AI assistant can suggest and execute MCP tools automatically
-            • 🤔 When the AI suggests using a tool, you'll be asked to confirm
-            • ✅ You can approve all suggestions (y), decline (n), or select specific ones (1,3)
+            - 🧠 The AI assistant can suggest and execute MCP tools automatically
+            - 🤔 When the AI suggests using a tool, you'll be asked to confirm
+            - ✅ You can approve all suggestions (y), decline (n), or select specific ones (1,3)
 
             **📝 Examples:**
             ```
             💬 "Search for python tutorials" → 🤖 AI suggests search tool → ✅ Confirm → 🚀 Execute
-            🛠️ /use_tool search query="python programming"
+            🔨 /use_tool search query="python programming"
             📄 /get_resource file://example.txt
             🔧 /tools
             ```
 
             **💡 Tips:**
+            - 🔄 Use UP/DOWN arrow keys to navigate command history
+            - 🎨 Rich-based input with colored prompts and clean formatting
+            - 💾 Command history is saved between sessions
+            - 🛑 Use **Ctrl+C** to exit the chat
         """
         ).strip()
-
-        if HAS_READLINE:
-            help_text += textwrap.dedent(
-                """
-                • ⬆️⬇️ Use **↑↓** arrow keys to navigate command history
-                • 🎨 Rich-based input with colored prompts and clean formatting
-                • 💾 Command history is saved between sessions
-                • 🛑 Use **Ctrl+C** to exit the chat
-            """
-            ).strip()
-        else:
-            help_text += textwrap.dedent(
-                """
-                • 🎨 Rich-based input with colored prompts and clean formatting
-                • 📦 Install readline package for command history navigation
-                • 🛑 Use **Ctrl+C** to exit the chat
-            """
-            ).strip()
 
         console.print(Panel(Markdown(help_text), title="❓ [yellow]Help[/yellow]", border_style="yellow"))
 
@@ -1152,7 +1128,7 @@ async def main():
 
     console.print("🚀 Initializing MCP ChatBot...")
     console.print(f"   🔧 Provider: {llm_config.provider.value}")
-    console.print(f"   🤖 Model: {llm_config.model}")
+    console.print(f"   🤖 Model: {llm_config.model}\n")
 
     chatbot = MCPChatBot(args.server, llm_config)
 
@@ -1160,7 +1136,7 @@ async def main():
         console.print("🔌 Connecting to MCP server...")
         try:
             await chatbot.initialize()
-            console.print("✅ MCP server connected!")
+            console.print("✅ MCP server connected!\n")
             await chatbot.chat_interactive()
         except ConnectionError as e:
             console.print(str(e))
