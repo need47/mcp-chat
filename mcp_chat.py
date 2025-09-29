@@ -7,7 +7,7 @@ import textwrap
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
-from typing import Dict, List
+from typing import List, Union
 
 # Import readline for history handling
 try:
@@ -82,8 +82,6 @@ def setup_readline():
 def get_user_input(prompt_text: str = "You") -> str:
     """Get user input with colored prompt and readline history navigation"""
     try:
-        import sys
-
         # Force flush all output before prompting
         sys.stdout.flush()
         sys.stderr.flush()
@@ -99,7 +97,7 @@ def get_user_input(prompt_text: str = "You") -> str:
         raise KeyboardInterrupt from None
 
 
-class ModelProvider(Enum):
+class LLMProvider(Enum):
     OLLAMA = "ollama"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
@@ -111,7 +109,7 @@ class ModelProvider(Enum):
 
 @dataclass
 class LLMConfig:
-    provider: ModelProvider
+    provider: LLMProvider
     model: str
     temperature: float = 0
     max_tokens: int = 2000
@@ -140,7 +138,7 @@ class LLMClient:
 
     def _initialize_llm(self):
         """Initialize the appropriate LangChain LLM based on provider"""
-        if self.config.provider == ModelProvider.OLLAMA:
+        if self.config.provider == LLMProvider.OLLAMA:
             from langchain_community.chat_models import ChatOllama
 
             self.llm = ChatOllama(
@@ -150,7 +148,7 @@ class LLMClient:
                 num_predict=self.config.max_tokens,
             )
 
-        elif self.config.provider == ModelProvider.OPENAI:
+        elif self.config.provider == LLMProvider.OPENAI:
             from langchain_openai import ChatOpenAI
 
             self.llm = ChatOpenAI(
@@ -159,7 +157,7 @@ class LLMClient:
                 max_tokens=self.config.max_tokens,
             )
 
-        elif self.config.provider == ModelProvider.ANTHROPIC:
+        elif self.config.provider == LLMProvider.ANTHROPIC:
             from langchain_anthropic import ChatAnthropic
 
             self.llm = ChatAnthropic(
@@ -168,7 +166,7 @@ class LLMClient:
                 max_tokens=self.config.max_tokens,
             )
 
-        elif self.config.provider == ModelProvider.GOOGLE:
+        elif self.config.provider == LLMProvider.GOOGLE:
             from langchain_google_genai import ChatGoogleGenerativeAI
 
             self.llm = ChatGoogleGenerativeAI(
@@ -177,7 +175,7 @@ class LLMClient:
                 max_output_tokens=self.config.max_tokens,
             )
 
-        elif self.config.provider == ModelProvider.MISTRAL:
+        elif self.config.provider == LLMProvider.MISTRAL:
             from langchain_mistralai import ChatMistralAI
 
             self.llm = ChatMistralAI(
@@ -186,7 +184,7 @@ class LLMClient:
                 max_tokens=self.config.max_tokens,
             )
 
-        elif self.config.provider == ModelProvider.GROQ:
+        elif self.config.provider == LLMProvider.GROQ:
             from langchain_groq import ChatGroq
 
             self.llm = ChatGroq(
@@ -198,27 +196,15 @@ class LLMClient:
         else:
             raise ValueError(f"Unsupported provider: {self.config.provider}")
 
-    async def chat(self, messages: List[Dict[str, str]]) -> str:
+    async def chat(self, messages: List[Union[SystemMessage, HumanMessage, AIMessage]]) -> str:
         """Send chat messages to the LLM and return response"""
         try:
-            # Convert dict messages to LangChain message format
-            lc_messages = []
-            for msg in messages:
-                role = msg["role"]
-                content = msg["content"]
-
-                if role == "system":
-                    lc_messages.append(SystemMessage(content=content))
-                elif role == "user":
-                    lc_messages.append(HumanMessage(content=content))
-                elif role == "assistant":
-                    lc_messages.append(AIMessage(content=content))
-
+            # Messages are already LangChain message objects
             # Get response from LLM
             if hasattr(self.llm, "ainvoke"):
-                response = await self.llm.ainvoke(lc_messages)
+                response = await self.llm.ainvoke(messages)
             else:
-                response = self.llm.invoke(lc_messages)
+                response = self.llm.invoke(messages)
 
             return response.content
 
@@ -232,7 +218,7 @@ class MCPChatBot:
     def __init__(self, mcp_server_path: str, llm_config: LLMConfig):
         self.mcp_client = Client(mcp_server_path)
         self.llm_config = llm_config
-        self.conversation_history = []
+        self.conversation_history: List[Union[SystemMessage, HumanMessage, AIMessage]] = []
         self.available_tools = []
         self.available_resources = []
 
@@ -307,7 +293,7 @@ class MCPChatBot:
         """
         ).strip()
 
-        self.conversation_history = [{"role": "system", "content": system_content}]
+        self.conversation_history = [SystemMessage(system_content)]
 
         # Setup readline for history management
         setup_readline()
@@ -315,18 +301,14 @@ class MCPChatBot:
     async def chat_interactive(self):
         """Start interactive chat session"""
         # Show input capabilities and mode
-        if sys.stdin.isatty():
-            if HAS_READLINE:
-                console.print("✨ Enhanced interactive input enabled:")
-                console.print("   • ⬆️⬇️ arrows: Navigate command history")
-            else:
-                console.print("🔧 Basic interactive input mode:")
-            console.print("   • 🎨 Colored prompts and formatted output")
-            console.print("   • 🛑 Ctrl+C: Exit chat")
-            console.print("   • 📦 Install readline for command history")
+        if HAS_READLINE:
+            console.print("✨ Enhanced interactive input enabled:")
+            console.print("   • ⬆️⬇️ arrows: Navigate command history")
         else:
-            console.print("❌ Non-interactive mode detected: Please run in an interactive terminal.")
-            sys.exit(1)
+            console.print("🔧 Basic interactive input mode:")
+        console.print("   • 🎨 Colored prompts and formatted output")
+        console.print("   • 🛑 Ctrl+C: Exit chat")
+        console.print("   • 📦 Install readline for command history")
 
         # Show welcome message
         print(
@@ -369,34 +351,31 @@ class MCPChatBot:
                         continue
 
                     # Add user message to conversation
-                    self.conversation_history.append({"role": "user", "content": user_input})
+                    self.conversation_history.append(HumanMessage(user_input))
 
                     # Get LLM response
                     console.print("\n[bold blue]Assistant[/bold blue] is thinking...")
                     response = await llm.chat(self.conversation_history)
 
                     # Add assistant response to conversation
-                    self.conversation_history.append({"role": "assistant", "content": response})
+                    self.conversation_history.append(AIMessage(response))
 
                     # Display response with rich formatting
                     console.print(
                         Panel(Markdown(response), title="[bold blue]Assistant[/bold blue]", border_style="blue")
                     )
 
-                    # First check if the response suggests using MCP tools and execute them
-                    tools_executed = await self.handle_tool_suggestions(response)
-
-                    # Only check for resources if no tools were executed
-                    resources_executed = False
-                    if not tools_executed:
-                        resources_executed = await self.handle_resource_suggestions(response)
+                    # Check for tool suggestions first, then resources if no tools executed
+                    any_executed = await self.handle_tool_suggestions(response)
+                    if not any_executed:
+                        any_executed = await self.handle_resource_suggestions(response)
 
                     # If tools/resources were executed, get another LLM response to format the results
-                    if tools_executed or resources_executed:
+                    if any_executed:
                         formatted_response = await llm.chat(self.conversation_history)
 
                         # Add the formatted response to conversation
-                        self.conversation_history.append({"role": "assistant", "content": formatted_response})
+                        self.conversation_history.append(AIMessage(formatted_response))
 
                         # Display the formatted response
                         console.print(
@@ -523,23 +502,13 @@ class MCPChatBot:
             console.print(f"🎯 Auto-extracted parameters: {params}")
 
             try:
-                # Check if we're in an interactive environment
-                import sys
-
-                if sys.stdin.isatty():
-                    confirm = get_user_input("🤔 Execute tool with these parameters? (y/n)").strip()
-                    if confirm.lower() in ["y", "yes"]:
-                        await self.execute_tool(tool_name, params)
-                        any_executed = True
-                        console.print("   ✅ Tool executed successfully")
-                    else:
-                        console.print("   ⏭️  Skipped.")
-                else:
-                    # Non-interactive mode - auto-execute
-                    console.print("   🤖 Non-interactive mode: Auto-executing tool...")
+                confirm = get_user_input("🤔 Execute tool with these parameters? (y/n)").strip()
+                if confirm.lower() in ["y", "yes"]:
                     await self.execute_tool(tool_name, params)
                     any_executed = True
                     console.print("   ✅ Tool executed successfully")
+                else:
+                    console.print("   ⏭️  Skipped.")
             except (KeyboardInterrupt, EOFError):
                 console.print("\n🛑 Tool execution cancelled")
                 continue
@@ -603,23 +572,13 @@ class MCPChatBot:
             )
 
             try:
-                # Check if we're in an interactive environment
-                import sys
-
-                if sys.stdin.isatty():
-                    confirm = get_user_input("🤔 Access this resource? (y/n)").strip()
-                    if confirm.lower() in ["y", "yes"]:
-                        await self.access_resource(resource_uri)
-                        any_executed = True
-                        console.print("   ✅ Resource accessed successfully")
-                    else:
-                        console.print("   ⏭️  Skipped.")
-                else:
-                    # Non-interactive mode - auto-execute
-                    console.print("   🤖 Non-interactive mode: Auto-accessing resource...")
+                confirm = get_user_input("🤔 Access this resource? (y/n)").strip()
+                if confirm.lower() in ["y", "yes"]:
                     await self.access_resource(resource_uri)
                     any_executed = True
                     console.print("   ✅ Resource accessed successfully")
+                else:
+                    console.print("   ⏭️  Skipped.")
             except (KeyboardInterrupt, EOFError):
                 console.print("\n🛑 Resource access cancelled")
                 continue
@@ -893,12 +852,12 @@ class MCPChatBot:
             else:
                 tool_result_msg = f"The tool '{tool_name}' was executed with parameters {params} and returned: {result}. Please format this data as requested by the user."
 
-            self.conversation_history.append({"role": "user", "content": tool_result_msg})
+            self.conversation_history.append(HumanMessage(tool_result_msg))
 
         except Exception as e:
             # Add error to conversation history silently (no console output)
             error_msg = f"Tool '{tool_name}' execution failed with error: {e}"
-            self.conversation_history.append({"role": "user", "content": error_msg})
+            self.conversation_history.append(HumanMessage(error_msg))
 
     async def access_resource(self, resource_uri: str):
         """Access a resource silently and add content to conversation history for LLM formatting"""
@@ -929,12 +888,12 @@ class MCPChatBot:
                 content = f"Error extracting content: {content_error}"
 
             resource_result_msg = f"The resource '{uri_str}' was accessed and returned the following data: {content}. Please format this data as requested by the user."
-            self.conversation_history.append({"role": "user", "content": resource_result_msg})
+            self.conversation_history.append(HumanMessage(resource_result_msg))
 
         except Exception as e:
             # Add error to conversation history silently (no console output)
             error_msg = f"Resource '{resource_uri}' access failed with error: {e}"
-            self.conversation_history.append({"role": "user", "content": error_msg})
+            self.conversation_history.append(HumanMessage(error_msg))
 
     async def show_tools(self):
         """🔧 Display available MCP tools"""
@@ -1079,7 +1038,7 @@ def parse_args():
     parser.add_argument(
         "--provider",
         "-p",
-        choices=[p.value for p in ModelProvider],
+        choices=[p.value for p in LLMProvider],
         default="ollama",
         help="LLM provider (default: ollama)",
     )
@@ -1147,21 +1106,21 @@ def parse_args():
 def create_llm_config(args) -> LLMConfig:
     """Create LLM configuration from parsed arguments with .env fallback for API keys"""
     try:
-        provider = ModelProvider(args.provider)
+        provider = LLMProvider(args.provider)
     except ValueError:
         console.print(f"❌ Invalid provider: {args.provider}")
-        console.print("Available providers: " + ", ".join([p.value for p in ModelProvider]))
+        console.print("Available providers: " + ", ".join([p.value for p in LLMProvider]))
         sys.exit(1)
 
     # Default models for each provider
     default_models = {
-        ModelProvider.OLLAMA: "llama3.2",
-        ModelProvider.OPENAI: "gpt-4o-mini",
-        ModelProvider.ANTHROPIC: "claude-sonnet-4-20250514",
-        ModelProvider.GOOGLE: "gemini-2.5-flash",
-        ModelProvider.MISTRAL: "mistral-large-latest",
-        ModelProvider.GROQ: "llama-3.3-70b-versatile",
-        ModelProvider.HUGGINGFACE: "microsoft/DialoGPT-medium",
+        LLMProvider.OLLAMA: "llama3.2",
+        LLMProvider.OPENAI: "gpt-4o-mini",
+        LLMProvider.ANTHROPIC: "claude-sonnet-4-20250514",
+        LLMProvider.GOOGLE: "gemini-2.5-flash",
+        LLMProvider.MISTRAL: "mistral-large-latest",
+        LLMProvider.GROQ: "llama-3.3-70b-versatile",
+        LLMProvider.HUGGINGFACE: "microsoft/DialoGPT-medium",
     }
 
     model = args.model or default_models[provider]
@@ -1180,6 +1139,13 @@ def create_llm_config(args) -> LLMConfig:
 
 async def main():
     args = parse_args()
+
+    # Ensure we're running in an interactive terminal
+    if not sys.stdin.isatty():
+        console.print("❌ Non-interactive mode detected.")
+        console.print("   This application requires an interactive terminal.")
+        console.print("   Please run in an interactive terminal.")
+        sys.exit(1)
 
     # Create LLM configuration
     llm_config = create_llm_config(args)
@@ -1205,6 +1171,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    import sys
-
     asyncio.run(main())
