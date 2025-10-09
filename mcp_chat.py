@@ -15,8 +15,7 @@ try:
     from pydantic import ValidationError
     from pydantic_core import ValidationError as PydanticCoreValidationError
 except ImportError:
-    ValidationError = Exception
-    PydanticCoreValidationError = Exception
+    pass
 
 # Load environment variables from .env file
 try:
@@ -79,7 +78,6 @@ def get_user_input(prompt_text: str = "You") -> str:
         # Display colored prompt and get input
         # Readline history navigation works automatically when available
         console.print(f"\n[bold green]{prompt_text}[/bold green]: ", end="")
-        sys.stdout.flush()
         result = input()
         return result
 
@@ -578,7 +576,7 @@ class MCPChatBot:
 
         return any_executed
 
-    def _extract_parameters(self, response: str, tool_schema) -> dict:
+    def _extract_parameters(self, response: str, tool_schema) -> dict | None:
         """🔍 Extract parameters for a tool from the LLM response with robust parsing"""
         input_schema = tool_schema.inputSchema
         properties = input_schema.get("properties", {})
@@ -988,7 +986,7 @@ def parse_args():
               python fastmcp-client.py server.py --provider openai --model gpt-4o-mini
 
               # Chat with Anthropic (uses API key from .env file)
-              python fastmcp-client.py server.py --provider anthropic --model claude-3-5-sonnet-20241022
+              python fastmcp-client.py server.py --provider anthropic --model claude-4-5-sonnet-20241022
 
               # Chat with Gemini (shortcut - sets provider=google model=gemini-2.5-flash)
               python fastmcp-client.py server.py --gemini
@@ -1022,7 +1020,7 @@ def parse_args():
     parser.add_argument(
         "--model",
         "-m",
-        help="Model name (uses provider default if not specified: ollama=llama3.2, openai=gpt-4o-mini, anthropic=claude-sonnet-4-20250514, google=gemini-2.5-flash)",
+        help="Model name (uses provider default if not specified: ollama=llama3.2, openai=gpt-4o-mini, anthropic=claude-sonnet-4-5, google=gemini-2.5-flash)",
     )
 
     parser.add_argument("--temperature", "-t", type=float, default=0, help="Temperature for LLM (0.0-1.0, default: 0)")
@@ -1057,8 +1055,8 @@ def parse_args():
     parser.add_argument(
         "--anthropic",
         "--claude",
-        action=partial(ProviderModelAction, provider="anthropic", model="claude-sonnet-4-20250514"),
-        help="Use anthropic claude-sonnet-4-20250514",
+        action=partial(ProviderModelAction, provider="anthropic", model="claude-sonnet-4-5"),
+        help="Use anthropic claude-sonnet-4-5",
     )
     parser.add_argument(
         "--ollama",
@@ -1092,7 +1090,7 @@ def create_llm_config(args) -> LLMConfig:
     default_models = {
         LLMProvider.OLLAMA: "llama3.2",
         LLMProvider.OPENAI: "gpt-4o-mini",
-        LLMProvider.ANTHROPIC: "claude-sonnet-4-20250514",
+        LLMProvider.ANTHROPIC: "claude-sonnet-4-5",
         LLMProvider.GOOGLE: "gemini-2.5-flash",
         LLMProvider.MISTRAL: "mistral-large-latest",
         LLMProvider.GROQ: "llama-3.3-70b-versatile",
