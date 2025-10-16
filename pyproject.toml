@@ -37,6 +37,7 @@ dependencies = [
     "openai>=1.0.0",
     "anthropic>=0.68.0",
     "langchain-groq>=0.3.8",
+    "langchain-ollama>=0.3.10",
 ]
 
 [dependency-groups]
@@ -46,11 +47,6 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
-]
-full = [
-    # Include all optional model providers
-    "mistralai>=0.4.0",
-    "langchain-ollama>=0.1.0",
 ]
 
 [project.urls]
@@ -128,3 +124,24 @@ markers = [
     "integration: marks tests as integration tests",
 ]
 
+[tool.basedpyright]
+# reportUnusedCallResult = false
+# reportUnknownMemberType = false
+# reportUnknownVariableType = false
+# reportUnknownArgumentType = false
+# reportAny = false
+# reportUnusedParameter = false
+# reportUnknownParameterType = false
+# reportMissingTypeArgument = false
+# reportExplicitAny = false
+typeCheckingMode = "basic"
+reportArgumentType = false
+reportAttributeAccessIssue = false
+reportReturnType = false
+reportOptionalMemberAccess = false
+reportCallIssue = false
+
+[tool.ty.rules]
+invalid-argument-type = "ignore"
+unknown-argument = "ignore"
+# invalid-return-type = "ignore"

@@ -8,14 +8,16 @@ import textwrap
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
-from typing import List, Union
+from typing import Any
 
-# Import pydantic for exception handling
-try:
-    from pydantic import ValidationError
-    from pydantic_core import ValidationError as PydanticCoreValidationError
-except ImportError:
-    pass
+from fastmcp import Client
+from rich import print
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+
+console = Console()
+
 
 # Load environment variables from .env file
 try:
@@ -33,14 +35,6 @@ except ImportError as e:
     print("Error: Missing LangChain core. Install with: pip install langchain-core")
     print(f"Specific error: {e}")
     sys.exit(1)
-
-from fastmcp import Client
-from rich import print
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-
-console = Console()
 
 
 def setup_readline():
@@ -127,7 +121,7 @@ class LLMClient:
     def _initialize_llm(self):
         """Initialize the appropriate LangChain LLM based on provider"""
         if self.config.provider == LLMProvider.OLLAMA:
-            from langchain_community.chat_models import ChatOllama
+            from langchain_ollama import ChatOllama
 
             self.llm = ChatOllama(
                 model=self.config.model,
@@ -184,7 +178,7 @@ class LLMClient:
         else:
             raise ValueError(f"Unsupported provider: {self.config.provider}")
 
-    async def chat(self, messages: List[Union[SystemMessage, HumanMessage, AIMessage]]) -> str:
+    async def chat(self, messages: list[SystemMessage | HumanMessage | AIMessage]) -> str:
         """Send chat messages to the LLM and return response"""
         try:
             # Messages are already LangChain message objects
@@ -209,7 +203,7 @@ class MCPChatBot:
         else:
             self.mcp_client = Client(mcp_server_path)
         self.llm_config = llm_config
-        self.conversation_history: List[Union[SystemMessage, HumanMessage, AIMessage]] = []
+        self.conversation_history: list[SystemMessage | HumanMessage | AIMessage] = []
         self.available_tools = []
         self.available_resources = []
 
@@ -320,14 +314,14 @@ class MCPChatBot:
                     if user_input.lower() in ["quit", "exit", "q", "x"]:
                         console.print("👋 Goodbye!")
                         break
+                    elif user_input in ["/help", "/h", "?"]:
+                        self.show_help()
+                        continue
                     elif user_input == "/tools":
                         await self.show_tools()
                         continue
                     elif user_input == "/resources":
                         await self.show_resources()
-                        continue
-                    elif user_input in ["/help", "/h", "?"]:
-                        self.show_help()
                         continue
                     elif user_input.startswith("/use_tool "):
                         tool_command = user_input[10:].strip()
@@ -354,7 +348,7 @@ class MCPChatBot:
                     )
 
                     # Check for tool suggestions first, then resources if no tools executed
-                    any_executed = await self.handle_tool_suggestions(response)
+                    any_executed = await self.handle_tool_suggestions(response, llm)
                     if not any_executed:
                         any_executed = await self.handle_resource_suggestions(response)
 
@@ -429,7 +423,7 @@ class MCPChatBot:
         except Exception as e:
             console.print(f"❌ Resource access error: {e}")
 
-    async def handle_tool_suggestions(self, response: str):
+    async def handle_tool_suggestions(self, response: str, llm: LLMClient):
         """Parse LLM response for tool suggestions and offer to execute them"""
         import re
 
@@ -437,10 +431,39 @@ class MCPChatBot:
 
         # Simple tool detection - check if LLM mentions using any available tool
         for tool in self.available_tools:
+            # Build a richer set of detection patterns for natural language variations.
+            # Goals:
+            #  - Catch phrases like:
+            #       "I can use the `search` tool with query=..."
+            #       "Use search with query=..."
+            #       "Let's run the search tool"
+            #       "Invoke `search` with ..." / "execute the search tool"
+            #  - Avoid matching incidental mentions where the model is *describing* a tool generically.
+            # Strategy:
+            #  - Require an action verb (use/run/call/invoke/execute) near the tool name
+            #  - Allow optional helper pronouns (I can / I'll / Let me / Let's)
+            #  - Allow optional backticks around the tool name and optional trailing word 'tool'
+            #  - Provide special pattern when followed by 'with' (indicates param intent)
+            name_escaped = re.escape(tool.name)
+            name_pattern = f"`?{name_escaped}`?"  # allow optional backticks
+
+            verbs_main = r"(?:use|run|call|invoke|execute)"
+            verbs_ing = r"(?:using|running|calling|invoking|executing)"
+            helpers = r"(?:I(?:'ll| can| will)?|Let(?:'s| us)|Let\s+me)"  # pronoun / helper forms
+
             tool_patterns = [
-                rf"use the `?{re.escape(tool.name)}`? tool",
-                rf"call `?{re.escape(tool.name)}`? with",
-                rf"using `?{re.escape(tool.name)}`? with",
+                # Helper + verb + tool
+                rf"\b{helpers}\s+{verbs_main}\s+(?:the\s+)?{name_pattern}(?:\s+tool)?\b",
+                # Plain verb + tool
+                rf"\b{verbs_main}\s+(?:the\s+)?{name_pattern}(?:\s+tool)?\b",
+                # Continuous form preceding the tool (e.g., 'using the search tool')
+                rf"\b{verbs_ing}\s+(?:the\s+)?{name_pattern}(?:\s+tool)?\b",
+                # Verb/ing + tool + 'with' (likely parameters follow)
+                rf"\b(?:{verbs_main}|{verbs_ing})\s+(?:the\s+)?{name_pattern}(?:\s+tool)?\s+with\b",
+                # Helper + verb + tool + 'with'
+                rf"\b{helpers}\s+(?:plan\s+to\s+|try\s+to\s+)?{verbs_main}\s+(?:the\s+)?{name_pattern}(?:\s+tool)?\s+with\b",
+                # Backticked tool referenced directly with a verb earlier (e.g., 'I can use `search` with')
+                rf"\b{helpers}\s+{verbs_main}\s+{name_pattern}\s+with\b",
             ]
 
             for pattern in tool_patterns:
@@ -479,15 +502,15 @@ class MCPChatBot:
                     required = "required" if param in tool_schema.inputSchema.get("required", []) else "optional"
                     console.print(f"      • {param} ({param_type}, {required}): {param_desc}")
 
-            # Extract parameters using simplified logic
-            params = self._extract_parameters(response, tool_schema)
+            # Ask the LLM to propose parameter values
+            params = await self._infer_tool_parameters(llm, tool_schema, response)
 
             if params is None:
-                console.print("   ⚠️  Could not extract required parameters.")
+                console.print("   ⚠️  Could not extract required parameters automatically.")
                 console.print("       💡 Please provide them manually or rephrase your request.")
                 continue
 
-            console.print(f"🎯 Auto-extracted parameters: {params}")
+            console.print(f"🎯 LLM-proposed parameters: {params}")
 
             try:
                 confirm = get_user_input("🤔 Execute tool with these parameters? (y/n)").strip()
@@ -516,15 +539,33 @@ class MCPChatBot:
         for resource in self.available_resources:
             uri_str = str(resource.uri)
             # More specific patterns to avoid false positives - only match actual suggestions
+            # Build richer detection patterns for resource access phrases, mirroring tool detection approach.
+            # Goals:
+            #  - Catch: "I can access <uri>", "I'll open <uri> resource", "read <uri>", "fetch <uri> to get ..."
+            #  - Support helpers (I can / I'll / Let me / Let's)
+            #  - Support multiple action verbs (access/read/open/fetch/get/retrieve/load)
+            #  - Allow optional 'the' and optional trailing word 'resource'
+            #  - Strong signal when followed by a purpose clause (to get/find/retrieve/obtain/see/view)
+            uri_escaped = re.escape(uri_str)
+            name_pattern = f"`?{uri_escaped}`?"  # optional backticks
+            helpers = r"(?:I(?:'ll| can| will)?|Let(?:'s| us)|Let\s+me)"
+            verbs_main = r"(?:access|read|open|fetch|get|retrieve|load)"
+            verbs_ing = r"(?:accessing|reading|opening|fetching|get(?:ting)?|retrieving|loading)"
+            purpose = r"(?:get|find|retrieve|obtain|see|view|inspect|look\s+at)"
+
             resource_patterns = [
-                # Direct suggestions
-                rf"I'll\s+access\s+(?:the\s+)?`?{re.escape(uri_str)}`?(?:\s+resource)?",
-                rf"Let\s+me\s+access\s+(?:the\s+)?`?{re.escape(uri_str)}`?(?:\s+resource)?",
-                rf"I\s+will\s+access\s+(?:the\s+)?`?{re.escape(uri_str)}`?(?:\s+resource)?",
-                # Only match "I can access" when followed by action words or to get/find something
-                rf"I\s+can\s+access\s+(?:the\s+)?`?{re.escape(uri_str)}`?(?:\s+resource)?\s+to\s+(?:get|find|retrieve|obtain)",
-                # Imperative suggestions
-                rf"access\s+(?:the\s+)?`?{re.escape(uri_str)}`?\s+resource\s+to\s+(?:get|find|retrieve|obtain)",
+                # Helper + main verb + resource
+                rf"\b{helpers}\s+{verbs_main}\s+(?:the\s+)?{name_pattern}(?:\s+resource)?\b",
+                # Main verb + resource
+                rf"\b{verbs_main}\s+(?:the\s+)?{name_pattern}(?:\s+resource)?\b",
+                # Continuous form + resource
+                rf"\b{verbs_ing}\s+(?:the\s+)?{name_pattern}(?:\s+resource)?\b",
+                # Helper + plan/try modifiers + verb + resource
+                rf"\b{helpers}\s+(?:plan\s+to\s+|try\s+to\s+)?{verbs_main}\s+(?:the\s+)?{name_pattern}(?:\s+resource)?\b",
+                # Any verb + resource + 'to' + purpose (expressed intent)
+                rf"\b(?:{helpers}\s+)?(?:{verbs_main}|{verbs_ing})\s+(?:the\s+)?{name_pattern}(?:\s+resource)?\s+to\s+{purpose}\b",
+                # Imperative purpose form: access/open <resource> resource to <purpose>
+                rf"\b(?:{verbs_main})\s+(?:the\s+)?{name_pattern}(?:\s+resource)?\s+to\s+{purpose}\b",
             ]
 
             for pattern in resource_patterns:
@@ -576,254 +617,92 @@ class MCPChatBot:
 
         return any_executed
 
-    def _extract_parameters(self, response: str, tool_schema) -> dict | None:
-        """🔍 Extract parameters for a tool from the LLM response with robust parsing"""
-        input_schema = tool_schema.inputSchema
-        properties = input_schema.get("properties", {})
-        required = input_schema.get("required", [])
+    async def _infer_tool_parameters(self, llm: LLMClient, tool_schema, response: str) -> dict[str, Any] | None:
+        """Ask the LLM to infer parameter values that satisfy the tool schema."""
 
-        params = {}
+        input_schema = tool_schema.inputSchema or {}
+        required = input_schema.get("required", []) or []
+        schema_json = json.dumps(input_schema, indent=2)
 
-        # 🎯 Enhanced parameter extraction for each required parameter
-        for param_name in required:
-            param_schema = properties.get(param_name, {})
-            param_type = param_schema.get("type", "string")
-            param_desc = param_schema.get("description", "")
+        prompt = textwrap.dedent(
+            f"""
+            You suggested using the tool `{tool_schema.name}`.
+            The tool accepts input following this JSON schema:
+            {schema_json}
 
-            # 🔄 Multiple extraction strategies
-            extracted_value = self._extract_single_parameter(response, param_name, param_type, param_desc)
+            The assistant message that mentioned the tool was:
+            ```
+            {response}
+            ```
 
-            if extracted_value is not None:
-                params[param_name] = extracted_value
+            Provide a JSON object containing parameter names and values that align with the schema.
+            Only include parameters defined in the schema. Infer optional parameters when the message
+            provides enough context. If you cannot confidently fill every required parameter, reply with null.
+            """
+        ).strip()
 
-        # 🎯 Return None if we couldn't find all required parameters
-        missing = [p for p in required if p not in params]
-        return None if missing else params
-
-    def _extract_single_parameter(self, response: str, param_name: str, param_type: str, param_desc: str):
-        """🎯 Extract a single parameter using multiple strategies"""
-        import re
-
-        # 📋 Strategy 1: Direct assignment patterns
-        direct_patterns = [
-            # ✅ Standard formats: param=value, param=[array], param="string"
-            rf"{re.escape(param_name)}\s*=\s*(\[[^\]]*\])",  # Arrays
-            rf"{re.escape(param_name)}\s*=\s*([\"'])([^\"']*)\1",  # Quoted strings
-            rf"{re.escape(param_name)}\s*=\s*([^\s,\]\)]+)",  # Unquoted values
-            # 🔗 Colon formats: param: value, param: [array]
-            rf"{re.escape(param_name)}\s*:\s*(\[[^\]]*\])",  # Arrays with colon
-            rf"{re.escape(param_name)}\s*:\s*([\"'])([^\"']*)\1",  # Quoted with colon
-            rf"{re.escape(param_name)}\s*:\s*([^\s,\]\)]+)",  # Unquoted with colon
+        extraction_messages = [
+            SystemMessage(
+                "Return ONLY a single JSON object matching the provided schema, or null. No code fences, no extra text."
+            ),
+            HumanMessage(prompt),
         ]
-
-        for pattern in direct_patterns:
-            match = re.search(pattern, response, re.IGNORECASE)
-            if match:
-                if len(match.groups()) == 3:  # Quoted string pattern
-                    raw_value = match.group(2)
-                else:
-                    raw_value = match.group(1)
-
-                parsed_value = self._parse_parameter_value(raw_value, param_type)
-                if parsed_value is not None:
-                    return parsed_value
-
-        # 💬 Strategy 2: Natural language patterns
-        natural_patterns = [
-            # 📝 "with param_name [values]" or "with param_name value"
-            rf"with\s+{re.escape(param_name)}\s+(\[[^\]]*\])",
-            rf"with\s+{re.escape(param_name)}\s+([\"'])([^\"']*)\1",
-            rf"with\s+{re.escape(param_name)}\s+([^\s,\.\!]+)",
-            # 🔧 "using param_name as [values]" or "using param_name as value"
-            rf"using\s+{re.escape(param_name)}\s+(?:as\s+)?(\[[^\]]*\])",
-            rf"using\s+{re.escape(param_name)}\s+(?:as\s+)?([\"'])([^\"']*)\1",
-            rf"using\s+{re.escape(param_name)}\s+(?:as\s+)?([^\s,\.\!]+)",
-            # 📊 "param_name of [values]" or "param_name of value"
-            rf"{re.escape(param_name)}\s+of\s+(\[[^\]]*\])",
-            rf"{re.escape(param_name)}\s+of\s+([\"'])([^\"']*)\1",
-            rf"{re.escape(param_name)}\s+of\s+([^\s,\.\!]+)",
-        ]
-
-        for pattern in natural_patterns:
-            match = re.search(pattern, response, re.IGNORECASE)
-            if match:
-                if len(match.groups()) == 3:  # Quoted string pattern
-                    raw_value = match.group(2)
-                else:
-                    raw_value = match.group(1)
-
-                parsed_value = self._parse_parameter_value(raw_value, param_type)
-                if parsed_value is not None:
-                    return parsed_value
-
-        # 🧠 Strategy 3: Context-based extraction using parameter description
-        if param_desc:
-            context_value = self._extract_from_context(response, param_name, param_type, param_desc)
-            if context_value is not None:
-                return context_value
-
-        # 🔍 Strategy 4: Fuzzy matching for common parameter names
-        fuzzy_value = self._extract_fuzzy_match(response, param_name, param_type)
-        if fuzzy_value is not None:
-            return fuzzy_value
-
-        return None
-
-    def _parse_parameter_value(self, raw_value: str, param_type: str):
-        """🔧 Parse a raw parameter value based on its expected type"""
-        import json
-
-        if not raw_value or raw_value.strip() == "":
-            return None
-
-        raw_value = raw_value.strip()
 
         try:
-            # 📋 Handle array types
-            if param_type == "array" or (raw_value.startswith("[") and raw_value.endswith("]")):
-                if raw_value.startswith("[") and raw_value.endswith("]"):
-                    # 🎯 Try JSON parsing first
-                    try:
-                        # Handle both single and double quotes
-                        clean_value = raw_value.replace("'", '"')
-                        return json.loads(clean_value)
-                    except json.JSONDecodeError:
-                        # 🔧 Advanced array parsing for complex cases
-                        return self._parse_complex_array(raw_value)
-                else:
-                    # 🔄 Single value that should be an array
-                    return [raw_value.strip("\"'")]
+            llm_reply = await llm.chat(extraction_messages)
+        except Exception:
+            return None
 
-            # 📦 Handle object types
-            elif param_type == "object":
-                if raw_value.startswith("{") and raw_value.endswith("}"):
-                    try:
-                        clean_value = raw_value.replace("'", '"')
-                        return json.loads(clean_value)
-                    except json.JSONDecodeError:
-                        return raw_value  # Return as string if can't parse
+        params = self._load_json_dict(llm_reply)
+        if params is None:
+            return None
 
-            # 🔢 Handle numeric types
-            elif param_type in ["integer", "number"]:
-                # Extract numbers from text
-                import re
+        # Ensure all required parameters are present
+        if any(param not in params for param in required):
+            return None
 
-                number_match = re.search(r"-?\d+\.?\d*", raw_value)
-                if number_match:
-                    num_str = number_match.group()
-                    return int(num_str) if param_type == "integer" and "." not in num_str else float(num_str)
+        return params
 
-            # ✅ Handle boolean types
-            elif param_type == "boolean":
-                lower_val = raw_value.lower()
-                if lower_val in ["true", "yes", "1", "on", "enabled"]:
-                    return True
-                elif lower_val in ["false", "no", "0", "off", "disabled"]:
-                    return False
+    def _load_json_dict(self, candidate: str) -> dict[str, Any] | None:
+        """Attempt to parse a JSON object from the LLM's reply."""
 
-            # 📄 Handle string types (default)
+        if not candidate:
+            return None
+
+        text_candidate = candidate.strip()
+
+        # Remove common code fence wrappers
+        if text_candidate.startswith("```"):
+            lines = text_candidate.splitlines()
+            if lines:
+                # Drop first line (``` or ```json)
+                lines = lines[1:]
+            # Remove trailing fence if present
+            while lines and lines[-1].strip() == "":
+                lines.pop()
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            text_candidate = "\n".join(lines).strip()
+
+        if text_candidate.lower() in {"null", "none"}:
+            return None
+
+        try:
+            parsed = json.loads(text_candidate)
+        except json.JSONDecodeError:
+            start = text_candidate.find("{")
+            end = text_candidate.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                snippet = text_candidate[start : end + 1]
+                try:
+                    parsed = json.loads(snippet)
+                except json.JSONDecodeError:
+                    return None
             else:
-                # Remove surrounding quotes
-                if (raw_value.startswith('"') and raw_value.endswith('"')) or (
-                    raw_value.startswith("'") and raw_value.endswith("'")
-                ):
-                    return raw_value[1:-1]
-                return raw_value
+                return None
 
-        except (ValueError, TypeError):
-            pass
-
-        # 🔄 Fallback: return as string
-        return raw_value.strip("\"'")
-
-    def _parse_complex_array(self, array_str: str) -> list:
-        """🔧 Parse complex array strings that might contain nested structures"""
-
-        # 🔧 Remove outer brackets
-        content = array_str[1:-1].strip()
-
-        if not content:
-            return []
-
-        # 📝 Handle simple comma-separated values
-        if not any(char in content for char in ['"', "'", "[", "]", "{", "}"]):
-            return [item.strip() for item in content.split(",") if item.strip()]
-
-        # 🎯 Advanced parsing for nested structures
-        items = []
-        current_item = ""
-        bracket_depth = 0
-        quote_char = None
-
-        for char in content:
-            if quote_char:
-                current_item += char
-                if char == quote_char and current_item[-2:] != f"\\{quote_char}":
-                    quote_char = None
-            elif char in ['"', "'"]:
-                quote_char = char
-                current_item += char
-            elif char in ["[", "{"]:
-                bracket_depth += 1
-                current_item += char
-            elif char in ["]", "}"]:
-                bracket_depth -= 1
-                current_item += char
-            elif char == "," and bracket_depth == 0:
-                if current_item.strip():
-                    items.append(current_item.strip().strip("\"'"))
-                current_item = ""
-            else:
-                current_item += char
-
-        # Add the last item
-        if current_item.strip():
-            items.append(current_item.strip().strip("\"'"))
-
-        return items
-
-    def _extract_from_context(self, response: str, param_name: str, param_type: str, param_desc: str):
-        """Extract parameter value using context from parameter description"""
-        import re
-
-        # Look for keywords from parameter description in the response
-        desc_words = re.findall(r"\w+", param_desc.lower())
-
-        for word in desc_words:
-            if len(word) > 3:  # Skip short words
-                # Look for values near description keywords
-                pattern = rf"{re.escape(word)}\s*[:\-]?\s*([^\s,\.\!]+)"
-                match = re.search(pattern, response, re.IGNORECASE)
-                if match:
-                    return self._parse_parameter_value(match.group(1), param_type)
-
-        return None
-
-    def _extract_fuzzy_match(self, response: str, param_name: str, param_type: str):
-        """Extract using fuzzy matching for common parameter name patterns"""
-        import re
-
-        # Common parameter aliases
-        fuzzy_mappings = {
-            "query": ["search", "term", "keyword", "q"],
-            "text": ["content", "message", "body"],
-            "id": ["identifier", "cid", "uid"],
-            "ids": ["identifiers", "cids", "uids", "list"],
-            "properties": ["props", "attributes", "fields"],
-            "format": ["type", "output"],
-            "limit": ["max", "maximum", "count"],
-        }
-
-        # Check if parameter name has known aliases
-        aliases = fuzzy_mappings.get(param_name.lower(), [])
-        all_names = [param_name] + aliases
-
-        for name in all_names:
-            # Try direct value extraction with fuzzy name
-            pattern = rf"{re.escape(name)}\s*[=:]\s*([^\s,\]\)]+)"
-            match = re.search(pattern, response, re.IGNORECASE)
-            if match:
-                return self._parse_parameter_value(match.group(1), param_type)
+        if isinstance(parsed, dict):
+            return parsed
 
         return None
 
@@ -859,19 +738,7 @@ class MCPChatBot:
             # Extract content more safely
             content = "No content available"
             try:
-                if hasattr(result, "contents") and result.contents and len(result.contents) > 0:
-                    first_content = result.contents[0]
-                    if hasattr(first_content, "text") and first_content.text:
-                        content = str(first_content.text)
-                    elif hasattr(first_content, "data") and first_content.data:
-                        content = str(first_content.data)
-                    else:
-                        content = str(first_content)
-                elif hasattr(result, "content") and result.content:
-                    # Try alternative content structure
-                    content = str(result.content)
-                else:
-                    content = str(result)
+                content = result.contents[0].text
             except Exception as content_error:
                 content = f"Error extracting content: {content_error}"
 
@@ -949,7 +816,8 @@ class MCPChatBot:
 
             **🤖 Smart Tool Integration:**
             - 🧠 The AI assistant can suggest and execute MCP tools automatically
-            - 🤔 When the AI suggests using a tool, you'll be asked to confirm
+            - � Parameter values are inferred for you—confirm or adjust as needed
+            - �🤔 When the AI suggests using a tool, you'll be asked to confirm
             - ✅ You can approve all suggestions (y), decline (n), or select specific ones (1,3)
 
             **📝 Examples:**
