@@ -427,6 +427,9 @@ class MCPChatBot:
         """Parse LLM response for tool suggestions and offer to execute them"""
         import re
 
+        # Cast response to string to ensure regex matching works
+        response = str(response)
+
         mentioned_tools = []
 
         # Simple tool detection - check if LLM mentions using any available tool
@@ -532,6 +535,9 @@ class MCPChatBot:
     async def handle_resource_suggestions(self, response: str):
         """Parse LLM response for resource suggestions and offer to access them"""
         import re
+
+        # Cast response to string to ensure regex matching works
+        response = str(response)
 
         mentioned_resources = []
 
